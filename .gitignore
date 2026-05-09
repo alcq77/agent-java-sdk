@@ -5,13 +5,9 @@
 # Build outputs should not be committed
 **/target/
 
-# Test code should not be committed
-**/src/test/
-
-# Docs should not be committed, except root readme
-docs/
-*.md
-!/readme.md
-
 # Local reference projects should not be committed
 references/
+
+# Local temporary dependency cache
+.tmp_lc4j/
+/.trae/

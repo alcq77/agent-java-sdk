@@ -4,12 +4,13 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.github.alcq77.cqgent.examples</groupId>
+    <groupId>io.github.alcq77.cqagent.examples</groupId>
     <artifactId>spring-starter-demo</artifactId>
     <version>0.1.0-SNAPSHOT</version>
 
     <properties>
         <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
         <spring-boot.version>3.3.13</spring-boot.version>
     </properties>
 
@@ -27,12 +28,12 @@
 
     <dependencies>
         <dependency>
-            <groupId>io.github.alcq77.cqgent</groupId>
-            <artifactId>cqgent-spring-boot-starter</artifactId>
+            <groupId>io.github.alcq77.cqagent</groupId>
+            <artifactId>cqagent-spring-boot-starter</artifactId>
             <version>0.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
-            <groupId>io.github.alcq77.cqgent</groupId>
+            <groupId>io.github.alcq77.cqagent</groupId>
             <artifactId>agent-api</artifactId>
             <version>0.1.0-SNAPSHOT</version>
         </dependency>
@@ -56,3 +57,4 @@
         </plugins>
     </build>
 </project>
+

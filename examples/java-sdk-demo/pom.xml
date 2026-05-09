@@ -4,7 +4,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <groupId>io.github.alcq77.cqgent.examples</groupId>
+    <groupId>io.github.alcq77.cqagent.examples</groupId>
     <artifactId>java-sdk-demo</artifactId>
     <version>0.1.0-SNAPSHOT</version>
 
@@ -14,12 +14,12 @@
 
     <dependencies>
         <dependency>
-            <groupId>io.github.alcq77.cqgent</groupId>
-            <artifactId>cqgent-java-sdk</artifactId>
+            <groupId>io.github.alcq77.cqagent</groupId>
+            <artifactId>cqagent-java-sdk</artifactId>
             <version>0.1.0-SNAPSHOT</version>
         </dependency>
         <dependency>
-            <groupId>io.github.alcq77.cqgent</groupId>
+            <groupId>io.github.alcq77.cqagent</groupId>
             <artifactId>agent-api</artifactId>
             <version>0.1.0-SNAPSHOT</version>
         </dependency>
@@ -35,3 +35,4 @@
         </plugins>
     </build>
 </project>
+

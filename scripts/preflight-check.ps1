@@ -5,7 +5,7 @@ Param(
 $ErrorActionPreference = "Stop"
 
 Write-Host "[preflight] compile..."
-Set-Location "$Root\\cqgent"
+Set-Location "$Root\\cq-agent-parent"
 mvn -q clean compile -DskipTests
 
 Write-Host "[preflight] unit tests..."
