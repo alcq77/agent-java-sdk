@@ -1,18 +1,24 @@
-﻿# 缁熶竴鏅鸿兘浣?Jar 浜у搧 - 鏁版嵁涓庝簨浠惰鏄?
-## 1. 褰撳墠褰㈡€?
-Jar 鍐呭祵妯″紡涓嶅己鍒朵緷璧栧閮ㄦ暟鎹簱鎴栨秷鎭郴缁熴€?
-- 榛樿浼氳瘽瀛樺偍锛氬唴瀛樺疄鐜帮紙`InMemoryProductSessionStore`锛?- 浜嬩欢鎬荤嚎锛氭棤寮哄埗瀹炵幇
+﻿# 统一智能体 Jar 产品 - 数据与事件说明
 
-## 2. 鎵╁睍寤鸿
+## 1. 当前形态
 
-褰撲笟鍔￠渶瑕佹寔涔呭寲鍜屽紓姝ュ鐞嗘椂锛屽彲閫氳繃 SPI 鎵╁睍锛?
-- 浼氳瘽鎸佷箙鍖栵細瀹炵幇 `ProductSessionStore`锛圧edis/DB锛?- 浜嬩欢閫氱煡锛氬湪涓氬姟渚у寘瑁?`AgentClient` 璋冪敤骞舵姇閫?MQ
+Jar 内嵌模式不强制依赖外部数据库或消息系统。
 
-## 3. 寤鸿浜嬩欢妯″瀷锛堝彲閫夛級
+- 默认会话存储：内存实现（`InMemoryProductSessionStore`）
+- 事件总线：无强制实现
+
+## 2. 扩展建议
+
+当业务需要持久化与异步处理时，可通过 SPI 扩展：
+
+- 会话持久化：实现 `ProductSessionStore`（Redis / JDBC 等）
+- 事件通知：在业务侧包装 `AgentClient` 调用并投递 MQ
+
+## 3. 建议事件模型（可选）
 
 - `AgentConversationStarted`
 - `AgentConversationCompleted`
 - `AgentToolExecuted`
 - `ModelEndpointFallbackTriggered`
 
-浠ヤ笂浜嬩欢寤鸿鐢辨帴鍏ユ柟鍦ㄥ簲鐢ㄥ眰瀹氫箟骞舵不鐞嗐€?
+以上事件建议由接入方在应用层定义并治理。

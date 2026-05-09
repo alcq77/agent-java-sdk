@@ -1,28 +1,34 @@
-﻿# 缁熶竴鏅鸿兘浣?Jar 浜у搧 - 寮€鍙戣鑼?
-## 1. 妯″潡瑙勮寖
+﻿# 统一智能体 Jar 产品 - 开发规范
 
-- `product-spi` 鍙斁鎺ュ彛锛屼笉鏀句笟鍔″疄鐜?- `product-core-engine` 涓嶄緷璧?Spring
-- `product-java-sdk` 璐熻矗瀵瑰鏄撶敤 API
-- `product-spring-boot-starter` 鍙仛鑷姩瑁呴厤锛屼笉渚靛叆鏍稿績閫昏緫
+## 1. 模块规范
 
-## 2. API 璁捐瑙勮寖
+- `cqagent-spi` 只放接口，不放业务实现
+- `cqagent-core-engine` 不依赖 Spring
+- `cqagent-java-sdk` 负责对外易用 API
+- `cqagent-spring-boot-starter` 只做自动装配，不侵入核心逻辑
 
-- 瀵瑰 DTO 浼樺厛澶嶇敤 `agent-api` / `model-api`
-- Builder 鏂规硶鍛藉悕璇箟娓呮櫚
-- 閿欒淇℃伅鍙畾浣嶏紙鍖呭惈 endpoint/provider 鍏抽敭淇℃伅锛?
-## 3. 鎵╁睍瑙勮寖
+## 2. API 设计规范
 
-- 鏂版ā鍨嬪崗璁細瀹炵幇 `ProductModelProvider`
-- 鏂板伐鍏凤細瀹炵幇 `ProductTool`
-- 鏂颁細璇濆瓨鍌細瀹炵幇 `ProductSessionStore`
+- 对外 DTO 优先复用 `agent-api` / `model-api`
+- Builder 方法命名语义清晰
+- 错误信息可定位（包含 endpoint / provider 等关键信息）
 
-绂佹鐩存帴淇敼鏍稿績绫诲疄鐜颁笟鍔＄壒渚嬶紝蹇呴』璧版墿灞曠偣銆?
-## 4. 閰嶇疆瑙勮寖
+## 3. 扩展规范
 
-- Starter 閰嶇疆缁熶竴鏀惧湪 `agent.product.*`
-- 鏁忔劅閰嶇疆浣跨敤鐜鍙橀噺娉ㄥ叆
-- 榛樿鍊煎簲鍙湰鍦板揩閫熻窇閫?
-## 5. 璐ㄩ噺瑙勮寖
+- 新模型协议：实现 `ProductModelProvider`
+- 新工具：实现 `ProductTool`
+- 新会话存储：实现 `ProductSessionStore`
 
-- 姣忔鏀瑰姩鑷冲皯閫氳繃 `mvn clean compile -DskipTests`
-- 鏂囨。涓庝唬鐮佸悓姝ユ洿鏂?- 鍙戝竷鍓嶆墽琛?CVE 妫€鏌?
+禁止直接修改核心类实现业务特例，必须走扩展点。
+
+## 4. 配置规范
+
+- Starter 配置统一放在 `agent.product.*`
+- 敏感配置使用环境变量注入
+- 默认值应支持本地快速跑通
+
+## 5. 质量规范
+
+- 每次改动至少通过 `mvn clean compile -DskipTests`
+- 文档与代码同步更新
+- 发布前执行 CVE 检查（见 `release-governance.md`）
