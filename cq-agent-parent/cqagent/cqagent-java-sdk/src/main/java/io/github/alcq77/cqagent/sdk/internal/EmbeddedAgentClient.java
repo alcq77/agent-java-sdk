@@ -7,7 +7,10 @@ import io.github.alcq77.cqagent.agent.api.dto.AgentChatResponse;
 import io.github.alcq77.cqagent.agent.api.error.AgentErrorCode;
 import io.github.alcq77.cqagent.agent.api.error.AgentRuntimeException;
 import io.github.alcq77.cqagent.core.agent.LangChain4jProductAgentRuntime;
+import io.github.alcq77.cqagent.core.model.CapabilityRequirement;
 import io.github.alcq77.cqagent.core.model.ProductModelRouter;
+import io.github.alcq77.cqagent.core.observability.AuditEvent;
+import io.github.alcq77.cqagent.core.observability.AuditLogger;
 import io.github.alcq77.cqagent.core.runtime.advisor.RuntimeAdvisorChain;
 import io.github.alcq77.cqagent.core.tool.ProductToolRegistry;
 import io.github.alcq77.cqagent.sdk.AgentClient;
@@ -51,16 +54,26 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
     private final Map<String, LongAdder> failureByType = new ConcurrentHashMap<>();
     private final LongAdder circuitSkipped = new LongAdder();
     private final RuntimeAdvisorChain advisorChain;
+    private final AuditLogger auditLogger;
 
     public EmbeddedAgentClient(ProductSdkOptions options,
                                ProductModelRouter modelRouter,
                                LangChain4jProductAgentRuntime runtime,
                                Map<String, ProductModelProvider> providers) {
+        this(options, modelRouter, runtime, providers, new AuditLogger(1000));
+    }
+
+    public EmbeddedAgentClient(ProductSdkOptions options,
+                               ProductModelRouter modelRouter,
+                               LangChain4jProductAgentRuntime runtime,
+                               Map<String, ProductModelProvider> providers,
+                               AuditLogger auditLogger) {
         this.options = options;
         this.modelRouter = modelRouter;
         this.runtime = runtime;
         this.providers = providers;
         this.advisorChain = new RuntimeAdvisorChain(options.getRuntimeAdvisors());
+        this.auditLogger = auditLogger;
     }
 
     /**
@@ -70,6 +83,7 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
     public AgentChatResponse chat(AgentChatRequest request) {
         totalRequests.increment();
         runtime.runtimeCounters().incrementSyncChatInvocation();
+        long startTime = System.currentTimeMillis();
         AgentChatRequest advised = advisorChain.before(request);
         String traceId = resolveTraceId(advised);
         String logicalModel = modelRouter.resolveLogicalModel(
@@ -79,7 +93,8 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
             advised.getTags()
         );
         List<ProductEndpointConfig> candidates = modelRouter.resolveCandidates(
-                logicalModel, options.getEndpoints(), options.getRouting(), options.getRoutePolicies());
+                logicalModel, options.getEndpoints(), options.getRouting(), options.getRoutePolicies(),
+                CapabilityRequirement.TOOLS, providers);
         if (candidates.isEmpty()) {
             markFailure("route", "none", new IllegalStateException("no route found"));
         }
@@ -105,6 +120,12 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
                     AgentChatResponse response = invokeWithTimeout(advised, endpoint, provider, logicalModel);
                     breaker(endpoint).onSuccess();
                     response.setTraceId(traceId);
+                    auditLogger.log(AuditEvent.builder()
+                        .type("CHAT_COMPLETE").traceId(traceId)
+                        .sessionId(advised.getSessionId()).provider(endpoint.getProvider())
+                        .endpointId(endpoint.getId()).logicalModel(logicalModel)
+                        .durationMs(System.currentTimeMillis() - startTime).success(true)
+                        .build());
                     return advisorChain.after(advised, response);
                 } catch (RuntimeException ex) {
                     breaker(endpoint).onFailure(ex.getMessage());
@@ -120,6 +141,13 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
             last == null ? new IllegalStateException("no route found") : last,
             traceId
         );
+        auditLogger.log(AuditEvent.builder()
+            .type("CHAT_ERROR").traceId(traceId)
+            .sessionId(advised.getSessionId())
+            .logicalModel(logicalModel)
+            .durationMs(System.currentTimeMillis() - startTime).success(false)
+            .errorMessage(wrapped.getMessage())
+            .build());
         throw advisorChain.onError(advised, wrapped);
     }
 
@@ -140,7 +168,8 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
             advised.getTags()
         );
         List<ProductEndpointConfig> candidates = modelRouter.resolveCandidates(
-            logicalModel, options.getEndpoints(), options.getRouting(), options.getRoutePolicies());
+            logicalModel, options.getEndpoints(), options.getRouting(), options.getRoutePolicies(),
+            CapabilityRequirement.STREAMING_WITH_TOOLS, providers);
         if (candidates.isEmpty()) {
             RuntimeException ex = new IllegalStateException("no route found");
             markFailure("route", "none", ex);
@@ -163,8 +192,8 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
                 try {
                     advised.setTraceId(traceId);
                     // 流式一次成功即结束外层候选循环（token 已在回调中推送）。
-                    invokeStreamingRuntime(advised, endpoint, provider, logicalModel, listener);
-                    breaker(endpoint).onSuccess();
+                    EndpointCircuitBreaker br = breaker(endpoint);
+                    invokeStreamingRuntime(advised, endpoint, provider, logicalModel, listener, br);
                     return;
                 } catch (RuntimeException ex) {
                     breaker(endpoint).onFailure(ex.getMessage());
@@ -207,6 +236,7 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
         metrics.put("endpointFailures", failureByEndpoint);
         metrics.put("failureByType", typedFailures);
         metrics.put("circuitSkipped", circuitSkipped.longValue());
+        metrics.put("auditEventsBuffered", auditLogger.bufferedCount());
         metrics.put("promptTemplates", runtime.promptTemplateMetrics());
         metrics.putAll(runtime.runtimeCounters().snapshot());
         return metrics;
@@ -321,7 +351,8 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
                                         ProductEndpointConfig endpoint,
                                         ProductModelProvider provider,
                                         String logicalModel,
-                                        AgentStreamingListener listener) {
+                                        AgentStreamingListener listener,
+                                        EndpointCircuitBreaker circuitBreaker) {
         if (!provider.capabilities().streaming()) {
             throw new IllegalStateException("streaming model is not supported by provider: " + provider.providerCode());
         }
@@ -332,6 +363,7 @@ public class EmbeddedAgentClient implements AgentClient, CircuitBreakerSnapshotP
             logicalModel,
             listener::onToken,
             response -> {
+                circuitBreaker.onSuccess();
                 response.setTraceId(request.getTraceId());
                 listener.onComplete(response);
             },

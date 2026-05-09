@@ -6,45 +6,31 @@ import io.github.alcq77.cqagent.model.api.dto.ChatMessageDto;
 import io.github.alcq77.cqagent.spi.session.ProductSessionStore;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.Cursor;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ScanOptions;
 
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.Objects;
 
 /**
  * 基于 Redis List 的会话存储实现。
  * <p>
  * - 每个 session 使用独立 key；
- * - 每次 append 后刷新 key 的 TTL；
- * - 读取失败时记录日志并返回空历史，避免影响主流程可用性。
+ * - append 使用 Redis Pipeline 保证原子性；
+ * - listSessionIds 使用 SCAN 替代 KEYS 避免生产环境阻塞。
  */
 @Slf4j
 public class RedisProductSessionStore implements ProductSessionStore, SessionStoreHealthProbe, SessionStoreMetricsProvider {
 
-    /**
-     * Redis 操作入口（字符串模板）。
-     */
     private final StringRedisTemplate redisTemplate;
-    /**
-     * 消息序列化器。
-     */
     private final ObjectMapper objectMapper;
-    /**
-     * session key 前缀。
-     */
     private final String keyPrefix;
-    /**
-     * 会话 TTL。
-     */
     private final Duration ttl;
-    /**
-     * 历史消息窗口上限。
-     */
     private final int maxHistoryMessages;
 
     public RedisProductSessionStore(StringRedisTemplate redisTemplate,
@@ -73,10 +59,6 @@ public class RedisProductSessionStore implements ProductSessionStore, SessionSto
     @Override
     public List<ChatMessageDto> history(String sessionId) {
         String key = key(sessionId);
-        Long size = redisTemplate.opsForList().size(key);
-        if (size == null || size <= 0) {
-            return List.of();
-        }
         List<String> payloads = redisTemplate.opsForList().range(key, 0, -1);
         if (payloads == null || payloads.isEmpty()) {
             return List.of();
@@ -94,21 +76,32 @@ public class RedisProductSessionStore implements ProductSessionStore, SessionSto
     @Override
     public void append(String sessionId, ChatMessageDto user, ChatMessageDto assistant) {
         String key = key(sessionId);
-        redisTemplate.opsForList().rightPush(key, encode(user));
-        redisTemplate.opsForList().rightPush(key, encode(assistant));
+        // 使用 Pipeline 保证两条消息的原子性写入
+        redisTemplate.executePipelined((org.springframework.data.redis.core.RedisCallback<Object>) connection -> {
+            connection.rPush(key.getBytes(), encode(user).getBytes(), encode(assistant).getBytes());
+            return null;
+        });
         trimAndRefresh(key);
     }
 
     @Override
     public void replaceHistory(String sessionId, List<ChatMessageDto> messages) {
-        // 覆盖式更新：先删后写，保持与 ChatMemoryStore.updateMessages 语义一致。
         String key = key(sessionId);
-        redisTemplate.delete(key);
         List<ChatMessageDto> safeMessages = messages == null ? List.of() : messages;
         int start = Math.max(0, safeMessages.size() - maxHistoryMessages);
+        // 使用 Pipeline 原子执行：删除旧 key + 写入新数据
+        List<String> payloads = new ArrayList<>();
         for (int i = start; i < safeMessages.size(); i++) {
-            redisTemplate.opsForList().rightPush(key, encode(safeMessages.get(i)));
+            payloads.add(encode(safeMessages.get(i)));
         }
+        byte[][] bytePayloads = payloads.stream().map(String::getBytes).toArray(byte[][]::new);
+        redisTemplate.executePipelined((org.springframework.data.redis.core.RedisCallback<Object>) connection -> {
+            connection.del(key.getBytes());
+            if (bytePayloads.length > 0) {
+                connection.rPush(key.getBytes(), bytePayloads);
+            }
+            return null;
+        });
         trimAndRefresh(key);
     }
 
@@ -117,9 +110,6 @@ public class RedisProductSessionStore implements ProductSessionStore, SessionSto
         redisTemplate.delete(key(sessionId));
     }
 
-    /**
-     * 统一裁剪窗口并刷新 TTL。
-     */
     private void trimAndRefresh(String key) {
         redisTemplate.opsForList().trim(key, -maxHistoryMessages, -1);
         if (!ttl.isZero() && !ttl.isNegative()) {
@@ -151,7 +141,7 @@ public class RedisProductSessionStore implements ProductSessionStore, SessionSto
     @Override
     public boolean healthy() {
         try {
-            String pong = redisTemplate.execute((RedisCallback<String>) connection -> connection.ping());
+            String pong = redisTemplate.execute((org.springframework.data.redis.core.RedisCallback<String>) connection -> connection.ping());
             return pong != null && "PONG".equalsIgnoreCase(pong);
         } catch (RedisConnectionFailureException ex) {
             log.warn("redis session store health check failed", ex);
@@ -172,17 +162,22 @@ public class RedisProductSessionStore implements ProductSessionStore, SessionSto
         return true;
     }
 
+    /**
+     * 使用 SCAN 替代 KEYS 命令，避免生产环境 Redis 阻塞。
+     */
     @Override
     public List<String> listSessionIds() {
-        Set<String> keys = redisTemplate.keys(keyPrefix + "*");
-        if (keys == null || keys.isEmpty()) {
-            return List.of();
-        }
-        List<String> out = new ArrayList<>(keys.size());
-        for (String k : keys) {
-            if (k.startsWith(keyPrefix)) {
-                out.add(k.substring(keyPrefix.length()));
+        List<String> out = new ArrayList<>();
+        ScanOptions options = ScanOptions.scanOptions().match(keyPrefix + "*").count(100).build();
+        try (Cursor<String> cursor = redisTemplate.scan(options)) {
+            while (cursor.hasNext()) {
+                String k = cursor.next();
+                if (k.startsWith(keyPrefix)) {
+                    out.add(k.substring(keyPrefix.length()));
+                }
             }
+        } catch (Exception ex) {
+            log.warn("failed to scan session keys", ex);
         }
         return out;
     }

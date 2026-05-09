@@ -2,6 +2,7 @@ package io.github.alcq77.cqagent.starter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.alcq77.cqagent.core.rag.*;
+import io.github.alcq77.cqagent.spi.rag.VectorStore;
 import io.github.alcq77.cqagent.core.runtime.advisor.AgentRuntimeAdvisor;
 import io.github.alcq77.cqagent.core.runtime.advisor.RagContextAdvisor;
 import io.github.alcq77.cqagent.core.session.InMemoryProductSessionStore;
@@ -245,8 +246,8 @@ public class ProductAgentAutoConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "agent.product.rag", name = "enabled", havingValue = "true")
     @ConditionalOnMissingBean
-    public InMemoryRagStore inMemoryRagStore() {
-        return new InMemoryRagStore();
+    public VectorStore vectorStore() {
+        return new InMemoryVectorStore();
     }
 
     @Bean
@@ -261,12 +262,12 @@ public class ProductAgentAutoConfiguration {
     @ConditionalOnMissingBean
     public RagIndexer ragIndexer(ProductStarterProperties properties,
                                  TextEmbeddingModel embeddingModel,
-                                 InMemoryRagStore store) {
+                                 VectorStore vectorStore) {
         RagChunkSplitter splitter = new RagChunkSplitter(
             properties.getRag().getChunkSize(),
             properties.getRag().getOverlap()
         );
-        return new RagIndexer(splitter, embeddingModel, store);
+        return new RagIndexer(splitter, embeddingModel, vectorStore);
     }
 
     @Bean
@@ -296,8 +297,8 @@ public class ProductAgentAutoConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "agent.product.rag", name = "enabled", havingValue = "true")
     @ConditionalOnMissingBean
-    public RagRetriever ragRetriever(InMemoryRagStore store, TextEmbeddingModel embeddingModel) {
-        return new RagRetriever(store, embeddingModel);
+    public RagRetriever ragRetriever(VectorStore vectorStore, TextEmbeddingModel embeddingModel) {
+        return new RagRetriever(vectorStore, embeddingModel);
     }
 
     @Bean

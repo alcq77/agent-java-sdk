@@ -30,7 +30,11 @@ public final class RuntimeAdvisorChain {
     public AgentChatRequest before(AgentChatRequest request) {
         AgentChatRequest current = request;
         for (AgentRuntimeAdvisor advisor : advisors) {
-            current = advisor.before(current);
+            AgentChatRequest next = advisor.before(current);
+            if (next == null) {
+                return current;
+            }
+            current = next;
         }
         return current;
     }

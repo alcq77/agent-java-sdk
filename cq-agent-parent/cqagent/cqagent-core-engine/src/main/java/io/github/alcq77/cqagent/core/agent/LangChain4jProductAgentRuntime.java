@@ -266,16 +266,19 @@ public class LangChain4jProductAgentRuntime {
         if (template == null || template.isBlank() || variables == null || variables.isEmpty()) {
             return template;
         }
-        String rendered = template;
-        for (Map.Entry<String, String> entry : variables.entrySet()) {
-            String key = entry.getKey();
-            if (key == null || key.isBlank()) {
-                continue;
-            }
-            String value = entry.getValue() == null ? "" : entry.getValue();
-            rendered = rendered.replace("{{" + key + "}}", value);
+        // Single-pass replacement via regex to prevent template injection:
+        // If a variable value contains {{otherKey}}, it will NOT be replaced
+        // because we replace all placeholders in one pass.
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile("\\{\\{(\\w+)}}");
+        java.util.regex.Matcher matcher = pattern.matcher(template);
+        StringBuilder sb = new StringBuilder();
+        while (matcher.find()) {
+            String key = matcher.group(1);
+            String value = variables.getOrDefault(key, matcher.group());
+            matcher.appendReplacement(sb, java.util.regex.Matcher.quoteReplacement(value));
         }
-        return rendered;
+        matcher.appendTail(sb);
+        return sb.toString();
     }
 
     private PromptTemplate resolveTemplate(String requestTemplateId) {

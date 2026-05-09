@@ -1,6 +1,7 @@
 package io.github.alcq77.cqagent.core.model;
 
 import io.github.alcq77.cqagent.spi.model.ProductEndpointConfig;
+import io.github.alcq77.cqagent.spi.model.ProductModelProvider;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,6 +58,23 @@ public class ProductModelRouter {
                                                          Map<String, ProductEndpointConfig> endpointById,
                                                          Map<String, String> routing,
                                                          Map<String, RoutePolicy> policies) {
+        return resolveCandidates(logicalModel, endpointById, routing, policies, CapabilityRequirement.NONE, Map.of());
+    }
+
+    /**
+     * Capability-aware candidate resolution: filters endpoints by provider capabilities
+     * in addition to health checks. Endpoints whose provider lacks required capabilities
+     * are skipped early, avoiding wasted retries on providers that can never fulfill the request.
+     *
+     * @param capabilityRequirement the capabilities required by the current request
+     * @param providers             provider registry for capability lookup
+     */
+    public List<ProductEndpointConfig> resolveCandidates(String logicalModel,
+                                                         Map<String, ProductEndpointConfig> endpointById,
+                                                         Map<String, String> routing,
+                                                         Map<String, RoutePolicy> policies,
+                                                         CapabilityRequirement capabilityRequirement,
+                                                         Map<String, ProductModelProvider> providers) {
         // 候选顺序决定了重试与熔断触发顺序，需保持稳定可解释。
         List<String> endpointIds = new ArrayList<>();
         RoutePolicy policy = policies.get(logicalModel);
@@ -78,10 +96,31 @@ public class ProductModelRouter {
                 continue;
             }
             if (!healthAware || healthChecker.reachable(endpoint)) {
-                out.add(endpoint);
+                if (satisfiesCapabilityRequirement(endpoint, capabilityRequirement, providers)) {
+                    out.add(endpoint);
+                }
             }
         }
         return out;
+    }
+
+    /**
+     * Returns true if the endpoint's provider satisfies the capability requirement.
+     */
+    private boolean satisfiesCapabilityRequirement(ProductEndpointConfig endpoint,
+                                                   CapabilityRequirement requirement,
+                                                   Map<String, ProductModelProvider> providers) {
+        if (requirement == null || requirement.isDefault()) {
+            return true;
+        }
+        if (providers == null || providers.isEmpty()) {
+            return true; // no provider info available — don't filter
+        }
+        ProductModelProvider provider = providers.get(endpoint.getProvider());
+        if (provider == null) {
+            return true; // unknown provider — don't filter (will fail at invocation with a clear error)
+        }
+        return requirement.satisfiedBy(provider.capabilities());
     }
 
     private List<String> policyOrder(String logicalModel, RoutePolicy policy) {

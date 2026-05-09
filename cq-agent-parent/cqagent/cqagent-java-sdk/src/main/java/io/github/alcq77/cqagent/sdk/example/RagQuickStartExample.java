@@ -6,12 +6,19 @@ import io.github.alcq77.cqagent.core.runtime.advisor.RagContextAdvisor;
 import io.github.alcq77.cqagent.sdk.AgentClient;
 import io.github.alcq77.cqagent.sdk.AgentClientBuilder;
 import io.github.alcq77.cqagent.spi.model.ProductEndpointConfig;
+import io.github.alcq77.cqagent.spi.rag.VectorStore;
 
 import java.nio.file.Path;
 import java.util.List;
 
 /**
  * 本地知识库问答最小示例。
+ * <p>
+ * 默认使用 InMemoryVectorStore（开发/测试用）。
+ * 生产环境可替换为 Milvus、PgVector 等实现：
+ * <pre>{@code
+ * VectorStore store = new MilvusVectorStore(...);  // 替换这一行
+ * }</pre>
  */
 public final class RagQuickStartExample {
 
@@ -19,7 +26,7 @@ public final class RagQuickStartExample {
     }
 
     public static void main(String[] args) {
-        InMemoryRagStore store = new InMemoryRagStore();
+        VectorStore store = new InMemoryVectorStore();
         TextEmbeddingModel embeddingModel = new SimpleHashEmbeddingModel(128);
         RagIndexer indexer = new RagIndexer(new RagChunkSplitter(400, 80), embeddingModel, store);
         Path kbDir = args.length > 0 ? Path.of(args[0]) : Path.of("./workspace/knowledge");

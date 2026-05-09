@@ -1,81 +1,76 @@
 package io.github.alcq77.cqagent.core.rag;
 
+import io.github.alcq77.cqagent.spi.rag.MetadataFilter;
+import io.github.alcq77.cqagent.spi.rag.ScoredChunk;
+import io.github.alcq77.cqagent.spi.rag.VectorChunk;
+import io.github.alcq77.cqagent.spi.rag.VectorStore;
+
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 向量检索器（余弦相似度）。
+ * RAG 检索器 —— 将查询 embedding 后委托给 VectorStore 做相似度检索。
  * <p>
  * 职责边界：
- * - 仅负责“召回”；不负责重排与答案生成；
- * - 支持可选 metadata/source 过滤，便于按租户、来源或目录做隔离检索。
+ * <ul>
+ *   <li>负责查询向量化 + 结果转换（VectorChunk → RagChunk）</li>
+ *   <li>向量检索逻辑（相似度计算、索引、过滤）完全委托给 VectorStore 实现</li>
+ *   <li>用户可通过替换 VectorStore bean 自由选择 Milvus、PgVector 等后端</li>
+ * </ul>
  */
 public class RagRetriever {
 
-    private final InMemoryRagStore store;
+    private final VectorStore vectorStore;
     private final TextEmbeddingModel embeddingModel;
 
-    public RagRetriever(InMemoryRagStore store, TextEmbeddingModel embeddingModel) {
-        this.store = store;
+    public RagRetriever(VectorStore vectorStore, TextEmbeddingModel embeddingModel) {
+        if (vectorStore == null) throw new IllegalArgumentException("vectorStore must not be null");
+        if (embeddingModel == null) throw new IllegalArgumentException("embeddingModel must not be null");
+        this.vectorStore = vectorStore;
         this.embeddingModel = embeddingModel;
     }
 
+    /**
+     * 向量检索，返回最相关的 RagChunk 列表。
+     */
     public List<RagChunk> retrieve(String query, int topK) {
         return retrieve(query, topK, null);
     }
 
+    /**
+     * 向量检索（带过滤条件）。
+     */
     public List<RagChunk> retrieve(String query, int topK, RagRetrievalFilter filter) {
-        // 先做过滤，再做相似度打分，减少无效计算并保证隔离语义。
-        double[] q = embeddingModel.embed(query);
-        List<ScoredChunk> scored = new ArrayList<>();
-        for (RagChunk chunk : store.all()) {
-            if (!matchedByFilter(chunk, filter)) {
-                continue;
-            }
-            scored.add(new ScoredChunk(chunk, cosine(q, chunk.embedding())));
+        double[] queryEmbedding = embeddingModel.embed(query);
+        MetadataFilter metadataFilter = toMetadataFilter(filter);
+        List<ScoredChunk> results = vectorStore.search(queryEmbedding, Math.max(1, topK), metadataFilter);
+
+        List<RagChunk> chunks = new ArrayList<>(results.size());
+        for (ScoredChunk scored : results) {
+            VectorChunk vc = scored.chunk();
+            chunks.add(new RagChunk(
+                vc.chunkId(),
+                vc.documentId(),
+                vc.text(),
+                vc.metadata(),
+                vc.embedding()
+            ));
         }
-        scored.sort(Comparator.comparingDouble(ScoredChunk::score).reversed());
-        List<RagChunk> result = new ArrayList<>();
-        int limit = Math.max(1, topK);
-        for (int i = 0; i < Math.min(limit, scored.size()); i++) {
-            result.add(scored.get(i).chunk());
-        }
-        return result;
+        return chunks;
     }
 
-    private static double cosine(double[] a, double[] b) {
-        if (a == null || b == null || a.length != b.length) {
-            return 0.0;
-        }
-        double dot = 0.0;
-        for (int i = 0; i < a.length; i++) {
-            dot += a[i] * b[i];
-        }
-        return dot;
+    /**
+     * Returns the underlying vector store (for direct access if needed).
+     */
+    public VectorStore vectorStore() {
+        return vectorStore;
     }
 
-    private static boolean matchedByFilter(RagChunk chunk, RagRetrievalFilter filter) {
+    private static MetadataFilter toMetadataFilter(RagRetrievalFilter filter) {
         if (filter == null) {
-            return true;
+            return MetadataFilter.none();
         }
-        Map<String, String> metadata = chunk.metadata() == null ? Map.of() : chunk.metadata();
-        for (Map.Entry<String, String> entry : filter.getEqualsMetadata().entrySet()) {
-            String actual = metadata.get(entry.getKey());
-            if (actual == null || !actual.equals(entry.getValue())) {
-                return false;
-            }
-        }
-        if (!filter.getAllowedSources().isEmpty()) {
-            String source = metadata.get("source");
-            if (source == null || filter.getAllowedSources().stream().noneMatch(source::contains)) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private record ScoredChunk(RagChunk chunk, double score) {
+        return MetadataFilter.of(filter.getEqualsMetadata(), filter.getAllowedSources());
     }
 }

@@ -14,6 +14,7 @@ import io.github.alcq77.cqagent.sdk.provider.DashScopeProductProvider;
 import io.github.alcq77.cqagent.sdk.provider.OllamaProductProvider;
 import io.github.alcq77.cqagent.sdk.provider.OpenAiCompatibleProductProvider;
 import io.github.alcq77.cqagent.sdk.provider.OpenAiProductProvider;
+import io.github.alcq77.cqagent.sdk.provider.SubprocessModelBridgeProvider;
 import io.github.alcq77.cqagent.sdk.tool.CurrentTimeProductTool;
 import io.github.alcq77.cqagent.spi.model.ProductEndpointConfig;
 import io.github.alcq77.cqagent.spi.model.ProductModelProvider;
@@ -244,6 +245,8 @@ public class AgentClientBuilder {
             providers.put(dashScope.providerCode(), dashScope);
             ProductModelProvider bedrock = new BedrockProductProvider();
             providers.put(bedrock.providerCode(), bedrock);
+            ProductModelProvider pythonBridge = new SubprocessModelBridgeProvider();
+            providers.put(pythonBridge.providerCode(), pythonBridge);
         }
         ProductModelRouter router = new ProductModelRouter(healthChecker);
         Map<String, LangChain4jProductAgentRuntime.PromptTemplate> promptTemplates = new LinkedHashMap<>();

@@ -35,4 +35,7 @@ public final class ModelProviderCodes {
 
     /** AWS Bedrock provider. */
     public static final String BEDROCK = "bedrock";
+
+    /** Python-native model bridge (vllm / llama.cpp / transformers via OpenAI-compatible API). */
+    public static final String PYTHON_BRIDGE = "python_bridge";
 }

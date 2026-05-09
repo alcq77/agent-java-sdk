@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -18,9 +19,11 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * 文件系统会话存储实现，借鉴 JavaClaw 的 workspace 持久化思路。
+ * 文件系统会话存储实现。
  * <p>
- * 约定每个 session 一个 JSON 文件：{sessionDir}/chat-{sessionId}.json
+ * 约定每个 session 一个 JSON 文件：{sessionDir}/chat-{hash}.json
+ * 使用 SHA-256 hash 作为文件名避免 ID 碰撞（如 "foo-bar" 和 "foo_bar"）。
+ * 写入使用临时文件 + 原子 rename 防止 crash 时文件损坏。
  */
 @Slf4j
 public class FileSystemProductSessionStore implements ProductSessionStore, SessionStoreHealthProbe, SessionStoreMetricsProvider {
@@ -30,7 +33,7 @@ public class FileSystemProductSessionStore implements ProductSessionStore, Sessi
     private final ObjectMapper objectMapper;
     private final Path sessionDir;
     private final int maxHistoryMessages;
-    private final Map<String, Object> locks = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
 
     public FileSystemProductSessionStore(ObjectMapper objectMapper, String directory, int maxHistoryMessages) {
         this.objectMapper = Objects.requireNonNull(objectMapper, "objectMapper");
@@ -48,26 +51,32 @@ public class FileSystemProductSessionStore implements ProductSessionStore, Sessi
 
     @Override
     public void register(String sessionId) {
-        Path file = resolveFile(sessionId);
-        if (Files.exists(file)) {
-            return;
+        Object lock = locks.computeIfAbsent(sessionId, k -> new Object());
+        synchronized (lock) {
+            Path file = resolveFile(sessionId);
+            if (Files.exists(file)) {
+                return;
+            }
+            writeMessages(file, List.of());
         }
-        writeMessages(file, List.of());
     }
 
     @Override
     public List<ChatMessageDto> history(String sessionId) {
-        Path file = resolveFile(sessionId);
-        if (!Files.exists(file)) {
-            return List.of();
-        }
-        try {
-            String payload = Files.readString(file);
-            List<ChatMessageDto> messages = objectMapper.readValue(payload, MESSAGE_LIST_TYPE);
-            return messages == null ? List.of() : messages;
-        } catch (Exception ex) {
-            log.warn("failed to read session history from file={}, fallback empty", file, ex);
-            return List.of();
+        Object lock = locks.computeIfAbsent(sessionId, k -> new Object());
+        synchronized (lock) {
+            Path file = resolveFile(sessionId);
+            if (!Files.exists(file)) {
+                return List.of();
+            }
+            try {
+                String payload = Files.readString(file);
+                List<ChatMessageDto> messages = objectMapper.readValue(payload, MESSAGE_LIST_TYPE);
+                return messages == null ? List.of() : new ArrayList<>(messages);
+            } catch (Exception ex) {
+                log.warn("failed to read session history from file={}, fallback empty", file, ex);
+                return List.of();
+            }
         }
     }
 
@@ -75,13 +84,10 @@ public class FileSystemProductSessionStore implements ProductSessionStore, Sessi
     public void append(String sessionId, ChatMessageDto user, ChatMessageDto assistant) {
         Object lock = locks.computeIfAbsent(sessionId, k -> new Object());
         synchronized (lock) {
-            List<ChatMessageDto> history = new ArrayList<>(history(sessionId));
+            List<ChatMessageDto> history = new ArrayList<>(readMessages(sessionId));
             history.add(user);
             history.add(assistant);
-            int overflow = history.size() - maxHistoryMessages;
-            if (overflow > 0) {
-                history.subList(0, overflow).clear();
-            }
+            trimToSize(history);
             writeMessages(resolveFile(sessionId), history);
         }
     }
@@ -91,20 +97,20 @@ public class FileSystemProductSessionStore implements ProductSessionStore, Sessi
         Object lock = locks.computeIfAbsent(sessionId, k -> new Object());
         synchronized (lock) {
             List<ChatMessageDto> history = messages == null ? new ArrayList<>() : new ArrayList<>(messages);
-            int overflow = history.size() - maxHistoryMessages;
-            if (overflow > 0) {
-                history.subList(0, overflow).clear();
-            }
+            trimToSize(history);
             writeMessages(resolveFile(sessionId), history);
         }
     }
 
     @Override
     public void deleteSession(String sessionId) {
-        try {
-            Files.deleteIfExists(resolveFile(sessionId));
-        } catch (Exception ex) {
-            log.warn("failed to delete session file for sessionId={}", sessionId, ex);
+        Object lock = locks.computeIfAbsent(sessionId, k -> new Object());
+        synchronized (lock) {
+            try {
+                Files.deleteIfExists(resolveFile(sessionId));
+            } catch (Exception ex) {
+                log.warn("failed to delete session file for sessionId={}", sessionId, ex);
+            }
         }
     }
 
@@ -177,18 +183,65 @@ public class FileSystemProductSessionStore implements ProductSessionStore, Sessi
         }
     }
 
+    /**
+     * Generates a collision-free filename using SHA-256 hash of the session ID.
+     * Unlike the old approach (replaceAll non-alnum to "_"), this preserves uniqueness:
+     * "foo-bar" and "foo_bar" will produce different hashes.
+     */
     private Path resolveFile(String sessionId) {
-        String safe = sessionId.replaceAll("[^a-zA-Z0-9_\\-]", "_");
-        return sessionDir.resolve("chat-" + safe + ".json");
+        String hash = sha256Hex(sessionId);
+        return sessionDir.resolve("chat-" + hash + ".json");
     }
 
+    /**
+     * Atomically writes messages: temp file → rename.
+     */
     private void writeMessages(Path file, List<ChatMessageDto> messages) {
         try {
             ensureDirectory();
             String payload = objectMapper.writeValueAsString(messages);
-            Files.writeString(file, payload, StandardCharsets.UTF_8);
+            Path tempFile = file.resolveSibling(file.getFileName() + ".tmp");
+            Files.writeString(tempFile, payload, StandardCharsets.UTF_8);
+            Files.move(tempFile, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
         } catch (Exception ex) {
             throw new IllegalStateException("failed to write session file: " + file, ex);
+        }
+    }
+
+    private List<ChatMessageDto> readMessages(String sessionId) {
+        Path file = resolveFile(sessionId);
+        if (!Files.exists(file)) {
+            return List.of();
+        }
+        try {
+            String payload = Files.readString(file);
+            List<ChatMessageDto> messages = objectMapper.readValue(payload, MESSAGE_LIST_TYPE);
+            return messages == null ? List.of() : new ArrayList<>(messages);
+        } catch (Exception ex) {
+            log.warn("failed to read session file={}, fallback empty", file, ex);
+            return List.of();
+        }
+    }
+
+    private void trimToSize(List<ChatMessageDto> history) {
+        int overflow = history.size() - maxHistoryMessages;
+        if (overflow > 0) {
+            history.subList(0, overflow).clear();
+        }
+    }
+
+    private static String sha256Hex(String input) {
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] bytes = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder();
+            for (byte b : bytes) {
+                hex.append(String.format("%02x", b));
+            }
+            return hex.toString();
+        } catch (Exception ex) {
+            // Fallback: use hashCode if SHA-256 is unavailable
+            return String.format("%08x", input.hashCode());
         }
     }
 }

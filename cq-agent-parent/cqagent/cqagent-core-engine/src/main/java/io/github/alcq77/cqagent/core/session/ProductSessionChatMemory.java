@@ -45,6 +45,9 @@ public class ProductSessionChatMemory implements ChatMemory {
      */
     @Override
     public void add(ChatMessage message) {
+        if (message == null) {
+            throw new IllegalArgumentException("message must not be null");
+        }
         messages.add(message);
     }
 

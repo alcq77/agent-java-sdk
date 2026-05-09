@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.extern.slf4j.Slf4j;
 
@@ -35,6 +36,7 @@ public class RagIndexRefresher {
 
     private final AtomicReference<RagIndexManifest> latestManifest = new AtomicReference<>(new RagIndexManifest());
     private final AtomicReference<String> lastError = new AtomicReference<>();
+    private final AtomicBoolean refreshing = new AtomicBoolean(false);
     private volatile long lastRefreshEpochMs;
     private volatile long lastErrorEpochMs;
 
@@ -64,6 +66,10 @@ public class RagIndexRefresher {
     }
 
     public void refreshNow() {
+        if (!refreshing.compareAndSet(false, true)) {
+            log.debug("RAG refresh already in progress, skipping");
+            return;
+        }
         try {
             RagIndexManifest manifest = indexer.syncIncremental(knowledgeRoot, importer, metadataStore);
             latestManifest.set(manifest);
@@ -73,11 +79,14 @@ public class RagIndexRefresher {
             lastError.set(ex.getMessage());
             lastErrorEpochMs = System.currentTimeMillis();
             log.error("RAG incremental refresh failed: root={}", knowledgeRoot, ex);
+        } finally {
+            refreshing.set(false);
         }
     }
 
     public boolean healthy() {
-        return lastError.get() == null || lastError.get().isBlank();
+        String err = lastError.get();
+        return err == null || err.isBlank();
     }
 
     public Map<String, Object> snapshot() {

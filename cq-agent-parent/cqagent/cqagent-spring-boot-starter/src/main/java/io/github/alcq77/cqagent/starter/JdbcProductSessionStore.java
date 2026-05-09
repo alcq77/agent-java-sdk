@@ -83,12 +83,14 @@ public class JdbcProductSessionStore implements ProductSessionStore, SessionStor
     @Override
     public void register(String sessionId) {
         ensureTable();
-        if (!hasSession(sessionId)) {
+        try {
             jdbcTemplate.update(
                     "insert into " + table + " (session_id, payload) values (?, ?)",
                     sessionId,
                     "[]"
             );
+        } catch (org.springframework.dao.DuplicateKeyException e) {
+            // Another thread inserted the same session — ignore.
         }
     }
 

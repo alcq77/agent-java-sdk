@@ -23,6 +23,9 @@ public class RagChunkSplitter {
 
     public List<RagChunk> split(RagDocument document, TextEmbeddingModel embeddingModel) {
         List<RagChunk> chunks = new ArrayList<>();
+        if (embeddingModel == null) {
+            throw new IllegalArgumentException("embeddingModel must not be null");
+        }
         if (document == null || document.content() == null || document.content().isBlank()) {
             return chunks;
         }
