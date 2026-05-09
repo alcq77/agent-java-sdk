@@ -32,4 +32,7 @@ public final class ModelProviderCodes {
 
     /** DeepSeek provider (OpenAI-compatible). */
     public static final String DEEPSEEK = "deepseek";
+
+    /** AWS Bedrock provider. */
+    public static final String BEDROCK = "bedrock";
 }

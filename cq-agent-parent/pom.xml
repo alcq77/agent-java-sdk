@@ -60,7 +60,7 @@
         <module>common</module>
         <module>agent</module>
         <module>model</module>
-        <module>cq-agent</module>
+        <module>cqagent</module>
     </modules>
 
     <build>
